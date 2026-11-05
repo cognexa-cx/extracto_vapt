@@ -1,6 +1,8 @@
 import logging
 
-from fastapi import APIRouter, Depends, Request
+import config
+
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel
 
 from auth.dependencies import get_current_user_allow_password_change
@@ -34,11 +36,35 @@ class LoginRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    # Optional: the web app sends the token as an httpOnly cookie instead.
+    refresh_token: str | None = None
 
 
 class LogoutRequest(BaseModel):
     refresh_token: str | None = None
+
+
+# The refresh token lives in an httpOnly cookie so page JavaScript (and any
+# XSS) can never read it. Scoped to this router's path so it is only sent to
+# the auth endpoints.
+_REFRESH_COOKIE = "refresh_token"
+_COOKIE_PATH = "/api/usermanagement"
+
+
+def _set_refresh_cookie(response: Response, raw_token: str) -> None:
+    response.set_cookie(
+        _REFRESH_COOKIE,
+        raw_token,
+        max_age=config.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+        httponly=True,
+        secure=config.IS_PRODUCTION,
+        samesite="lax",
+        path=_COOKIE_PATH,
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(_REFRESH_COOKIE, path=_COOKIE_PATH)
 
 
 class ChangePasswordRequest(BaseModel):
@@ -62,7 +88,7 @@ class LoginResponse(BaseModel):
 
 @router.post("/login", response_model=LoginResponse)
 @limiter.limit("5/minute")
-async def login(request: Request, body: LoginRequest):
+async def login(request: Request, response: Response, body: LoginRequest):
     email = body.identifier.strip().lower()
 
     row = await fetchrow_query(
@@ -81,6 +107,7 @@ async def login(request: Request, body: LoginRequest):
         token_version=row["token_version"],
     )
     refresh_token = await issue_refresh_token(row["id"])
+    _set_refresh_cookie(response, refresh_token)
     user = UserOut(
         id=row["id"], email=row["email"], name=row["name"], role=row["role"],
         must_change_password=bool(row["must_change_password"]),
@@ -90,24 +117,27 @@ async def login(request: Request, body: LoginRequest):
     return LoginResponse(
         success=True,
         message="Login successful",
-        data={"token": token, "refresh_token": refresh_token, "employee": user.model_dump()},
+        data={"token": token, "employee": user.model_dump()},
     )
 
 
 @router.post("/refresh", response_model=LoginResponse)
 @limiter.limit("30/minute")
-async def refresh(request: Request, body: RefreshRequest):
+async def refresh(request: Request, response: Response, body: RefreshRequest | None = None):
     """
     Trade a still-valid refresh token for a new access token (silent
     re-auth when the short-lived access token expires). The refresh
     token itself is rotated: the one sent in is revoked and a new one
     comes back, so it's single-use.
     """
-    result = await validate_and_rotate(body.refresh_token)
+    raw_token = request.cookies.get(_REFRESH_COOKIE) or (body.refresh_token if body else None)
+    result = await validate_and_rotate(raw_token) if raw_token else None
     if not result:
+        _clear_refresh_cookie(response)
         return LoginResponse(success=False, message="Refresh token is invalid or expired")
 
     user_id, new_refresh_token = result
+    _set_refresh_cookie(response, new_refresh_token)
     row = await fetchrow_query(
         "SELECT id, email, role, is_active, token_version FROM users WHERE id = ?", user_id
     )
@@ -123,17 +153,19 @@ async def refresh(request: Request, body: RefreshRequest):
     return LoginResponse(
         success=True,
         message="Token refreshed",
-        data={"token": token, "refresh_token": new_refresh_token},
+        data={"token": token},
     )
 
 
 @router.post("/logout", response_model=LoginResponse)
-async def logout(body: LogoutRequest | None = None):
+async def logout(request: Request, response: Response, body: LogoutRequest | None = None):
     # Revokes the one refresh token this session was using, so it can't
     # be traded for a new access token after logout. The (already
     # short-lived) access token itself just expires naturally.
-    if body and body.refresh_token:
-        await revoke_refresh_token(body.refresh_token)
+    raw_token = request.cookies.get(_REFRESH_COOKIE) or (body.refresh_token if body else None)
+    if raw_token:
+        await revoke_refresh_token(raw_token)
+    _clear_refresh_cookie(response)
     return LoginResponse(success=True, message="Logged out")
 
 
