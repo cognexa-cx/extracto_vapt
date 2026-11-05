@@ -35,7 +35,22 @@ SQL_SERVER_DRIVER   = os.getenv("SQL_SERVER_DRIVER", "ODBC Driver 17 for SQL Ser
 # "production" disables uvicorn's --reload (file-watcher, dev-only) and makes
 # the global exception handler hide internal error details from responses.
 # Anything other than "production" is treated as development.
-ENVIRONMENT = os.getenv("ENVIRONMENT", "development").strip().lower()
+# SCR-06: ENVIRONMENT must be set explicitly to a known value -- a missing or
+# misspelled value fails startup instead of silently falling back to
+# development (which exposes API docs and detailed error text).
+_ALLOWED_ENVIRONMENTS = {"development", "test", "production"}
+_raw_environment = os.getenv("ENVIRONMENT")
+if _raw_environment is None:
+    raise RuntimeError(
+        "ENVIRONMENT must be explicitly configured "
+        f"(one of: {', '.join(sorted(_ALLOWED_ENVIRONMENTS))})."
+    )
+ENVIRONMENT = _raw_environment.strip().lower()
+if ENVIRONMENT not in _ALLOWED_ENVIRONMENTS:
+    raise RuntimeError(
+        f"Invalid ENVIRONMENT value {_raw_environment!r} "
+        f"(one of: {', '.join(sorted(_ALLOWED_ENVIRONMENTS))})."
+    )
 IS_PRODUCTION = ENVIRONMENT == "production"
 
 # ── Upload limits ─────────────────────────────────────────────────────────────
