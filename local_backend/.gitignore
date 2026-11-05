@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+**/__pycache__/
+
+# Real env file with actual secrets — .env.local.example stays tracked as
+# the template, this doesn't.
+.env
+.env.local
+.env.*.local
+
+logs/
+storage/

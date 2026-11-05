@@ -1,0 +1,84 @@
+.thankyou-container {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #0f172a, #1e293b 60%, #0f172a);
+  overflow: hidden;
+}
+
+.thankyou-circle {
+  position: absolute;
+  width: 60vmax;
+  height: 60vmax;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.25), transparent 70%);
+  animation: thankyou-pulse 4s ease-in-out infinite;
+}
+
+@keyframes thankyou-pulse {
+  0%, 100% { transform: scale(0.9); opacity: 0.6; }
+  50% { transform: scale(1.05); opacity: 1; }
+}
+
+.thankyou-content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  animation: thankyou-fade-up 0.9s ease-out both;
+}
+
+@keyframes thankyou-fade-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.thankyou-check {
+  width: 96px;
+  height: 96px;
+  margin-bottom: 28px;
+}
+
+.thankyou-check-circle {
+  stroke: #38bdf8;
+  stroke-width: 2;
+  stroke-miterlimit: 10;
+  stroke-dasharray: 166;
+  stroke-dashoffset: 166;
+  animation: thankyou-circle 0.8s cubic-bezier(0.65, 0, 0.45, 1) forwards;
+}
+
+.thankyou-check-mark {
+  stroke: #38bdf8;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 48;
+  stroke-dashoffset: 48;
+  animation: thankyou-mark 0.5s 0.7s cubic-bezier(0.65, 0, 0.45, 1) forwards;
+}
+
+@keyframes thankyou-circle {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes thankyou-mark {
+  to { stroke-dashoffset: 0; }
+}
+
+.thankyou-title {
+  font-size: clamp(1.8rem, 4vw, 3rem);
+  font-weight: 700;
+  color: #f8fafc;
+  margin: 0 0 12px;
+  letter-spacing: 0.5px;
+}
+
+.thankyou-subtitle {
+  font-size: clamp(0.95rem, 1.6vw, 1.15rem);
+  color: #94a3b8;
+  margin: 0;
+}

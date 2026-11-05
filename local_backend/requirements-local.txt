@@ -1,0 +1,16 @@
+# Extra dependencies for the OCR engine (paddlepaddle in particular is a
+# large, heavy package, so it's kept in its own file rather than merged
+# into requirements.txt).
+#
+# This file pins the GPU build actually used in this deployment (matched to
+# an NVIDIA driver >=550.54.14 for cu126 — no separate CUDA Toolkit install
+# needed, the wheel bundles its own CUDA runtime; set PADDLEOCR_DEVICE=gpu:0
+# in .env, see .env.local.example):
+#   pip install -r requirements.txt -r requirements-local.txt -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+#
+# CPU-only install: replace paddlepaddle-gpu below with paddlepaddle==<version>
+# and drop the -i index url, then set PADDLEOCR_DEVICE=cpu in .env.
+
+paddlepaddle-gpu==3.3.1
+paddleocr==3.7.0
+paddlex[ocr]==3.7.2

@@ -1,0 +1,75 @@
+/* Additional responsive utilities for login page */
+
+/* High-DPI screens */
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+  .login-bg-image {
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: crisp-edges;
+  }
+}
+
+/* Dark mode support (optional) */
+@media (prefers-color-scheme: dark) {
+  .login-card-wrapper {
+    background: rgba(255, 255, 255, 0.95);
+  }
+}
+
+/* Print styles */
+@media print {
+  .login-bg-layer {
+    display: none;
+  }
+
+  .login-content-layer {
+    position: static;
+    min-height: auto;
+  }
+
+  .login-card-wrapper {
+    border: 1px solid #000;
+    box-shadow: none;
+  }
+}
+
+/* Foldable devices support */
+@media (spanning: single-fold-vertical) {
+  .login-content-layer {
+    margin-left: env(fold-left);
+    width: env(fold-width);
+  }
+}
+
+/* Ensure minimum touch target size */
+.password-toggle,
+.login-button,
+.terms-link {
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (max-width: 400px) {
+  .password-toggle {
+    min-height: 48px;
+    min-width: 48px;
+  }
+}
+
+/* Smooth transitions */
+.login-card-wrapper,
+.login-form,
+.login-title,
+.form-input,
+.login-button {
+  transition: all 0.3s ease-in-out;
+}
+
+/* Prevent content shift on modal open */
+body.modal-open {
+  overflow: hidden;
+  position: fixed;
+  width: 100%;
+}

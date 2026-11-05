@@ -1,0 +1,59 @@
+/* Frontend\tab\src\index.css */
+@import "tailwindcss";
+
+@theme {
+  --color-canvas: #f6f7fa;
+  --color-surface: #ffffff;
+  --color-ink: #131b33;
+  --color-muted: #5b6478;
+  --color-accent: #14b8a6;
+  --color-accent-deep: #0b7a6f;
+  --color-line: #e4e7ee;
+
+  --font-display: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+body {
+  background-color: var(--color-canvas);
+}
+
+/* Custom scrollbar — matches Web's, since a bare default browser scrollbar
+   (2-4px on most touch/mobile browsers) is hard to see and grab on a
+   touch kiosk. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #888 #f1f1f1;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+@keyframes bracket-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.bracket-pulse {
+  animation: bracket-pulse 2.4s ease-in-out infinite;
+}
