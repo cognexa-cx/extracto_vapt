@@ -121,6 +121,7 @@ async def init_pool() -> aioodbc.Pool:
         await execute_query(_CREATE_EXTRACTION_RECORD_PAGES_TABLE_SQL)
         await execute_query(_CREATE_USERS_TABLE_SQL)
         await execute_query(_ADD_TOKEN_VERSION_COLUMN_SQL)
+        await execute_query(_ADD_MUST_CHANGE_PASSWORD_COLUMN_SQL)
         await execute_query(_CREATE_REFRESH_TOKENS_TABLE_SQL)
         await execute_query(_WIDEN_PII_COLUMNS_SQL)
         logger.info(
@@ -380,6 +381,18 @@ IF NOT EXISTS (
 )
 BEGIN
     ALTER TABLE users ADD token_version INT NOT NULL DEFAULT 1;
+END
+"""
+
+# SCR-02: when set, the account may only call the change-password endpoint
+# (enforced server-side in auth/dependencies.py) until a new password is set.
+_ADD_MUST_CHANGE_PASSWORD_COLUMN_SQL = """
+IF NOT EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_NAME = 'users' AND COLUMN_NAME = 'must_change_password'
+)
+BEGIN
+    ALTER TABLE users ADD must_change_password BIT NOT NULL DEFAULT 0;
 END
 """
 

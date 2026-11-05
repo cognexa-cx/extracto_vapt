@@ -37,12 +37,35 @@ async def _user_from_bearer(authorization: str | None) -> dict | None:
     # waiting out the access token's own (short, but non-zero) expiry.
     # See auth/refresh_tokens.invalidate_all_sessions.
     row = await fetchrow_query(
-        "SELECT is_active, token_version FROM users WHERE id = ?", payload["sub"]
+        "SELECT is_active, token_version, must_change_password FROM users WHERE id = ?", payload["sub"]
     )
     if not row or not row["is_active"] or row["token_version"] != payload.get("tv"):
         return None
 
-    return {"id": payload["sub"], "email": payload["email"], "role": payload["role"]}
+    return {
+        "id": payload["sub"],
+        "email": payload["email"],
+        "role": payload["role"],
+        "must_change_password": bool(row["must_change_password"]),
+    }
+
+
+_PASSWORD_CHANGE_REQUIRED = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN,
+    detail="Password change required",
+    headers={"X-Password-Change-Required": "true"},
+)
+
+
+async def get_current_user_allow_password_change(
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Like get_current_user but also accepts accounts flagged
+    must_change_password — used only by /me and /change-password."""
+    user = await _user_from_bearer(authorization)
+    if not user:
+        raise _UNAUTHENTICATED
+    return user
 
 
 async def get_current_user(
@@ -51,6 +74,8 @@ async def get_current_user(
     user = await _user_from_bearer(authorization)
     if not user:
         raise _UNAUTHENTICATED
+    if user["must_change_password"]:
+        raise _PASSWORD_CHANGE_REQUIRED
     return user
 
 
@@ -62,7 +87,9 @@ async def _user_or_device_from_headers(
     (it has its own separate signed-URL path for a caller with no headers
     at all, e.g. a plain <img src>), not an automatic 401."""
     user = await _user_from_bearer(authorization)
-    if user:
+    # A flagged account is not authenticated for anything except the
+    # change-password flow, so fall through to the device-key check.
+    if user and not user["must_change_password"]:
         return user
 
     # hmac.compare_digest, not ==, so a mismatched key can't be timed to

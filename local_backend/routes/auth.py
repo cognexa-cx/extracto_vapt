@@ -3,18 +3,21 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
-from auth.dependencies import get_current_user
+from auth.dependencies import get_current_user_allow_password_change
 from auth.rate_limit import limiter
-from auth.security import create_access_token, verify_password
+from auth.security import (
+    create_access_token,
+    hash_password,
+    validate_new_password,
+    verify_password,
+)
 from auth.refresh_tokens import (
     issue_refresh_token,
     validate_and_rotate,
     revoke_refresh_token,
+    invalidate_all_sessions,
 )
-# invalidate_all_sessions is available for a future password-change route
-# to call (Local Backend has none today, unlike Cloud Backend) — not
-# imported here since nothing currently uses it.
-from database.connection import fetchrow_query
+from database.connection import execute_query, fetchrow_query
 from services.pii import decrypt_row, encrypt_for_lookup
 
 logger = logging.getLogger(__name__)
@@ -38,11 +41,17 @@ class LogoutRequest(BaseModel):
     refresh_token: str | None = None
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 class UserOut(BaseModel):
     id: str
     email: str
     name: str | None = None
     role: str
+    must_change_password: bool = False
 
 
 class LoginResponse(BaseModel):
@@ -57,7 +66,7 @@ async def login(request: Request, body: LoginRequest):
     email = body.identifier.strip().lower()
 
     row = await fetchrow_query(
-        "SELECT id, email, password_hash, name, role, is_active, token_version FROM users WHERE email = ?",
+        "SELECT id, email, password_hash, name, role, is_active, token_version, must_change_password FROM users WHERE email = ?",
         encrypt_for_lookup("users", "email", email),
     )
     if row:
@@ -72,7 +81,10 @@ async def login(request: Request, body: LoginRequest):
         token_version=row["token_version"],
     )
     refresh_token = await issue_refresh_token(row["id"])
-    user = UserOut(id=row["id"], email=row["email"], name=row["name"], role=row["role"])
+    user = UserOut(
+        id=row["id"], email=row["email"], name=row["name"], role=row["role"],
+        must_change_password=bool(row["must_change_password"]),
+    )
 
     logger.info("Login succeeded", extra={"event": "login_succeeded", "email": email})
     return LoginResponse(
@@ -126,8 +138,43 @@ async def logout(body: LogoutRequest | None = None):
 
 
 @router.get("/me", response_model=UserOut)
-async def me(current_user: dict = Depends(get_current_user)):
+async def me(current_user: dict = Depends(get_current_user_allow_password_change)):
     row = await fetchrow_query(
-        "SELECT id, email, name, role FROM users WHERE id = ?", current_user["id"]
+        "SELECT id, email, name, role, must_change_password FROM users WHERE id = ?",
+        current_user["id"],
     )
-    return UserOut(**decrypt_row("users", row))
+    row = decrypt_row("users", row)
+    row["must_change_password"] = bool(row["must_change_password"])
+    return UserOut(**row)
+
+
+@router.post("/change-password", response_model=LoginResponse)
+@limiter.limit("5/minute")
+async def change_password(
+    request: Request,
+    body: ChangePasswordRequest,
+    current_user: dict = Depends(get_current_user_allow_password_change),
+):
+    """
+    Set a new password (SCR-02). The only privileged-adjacent route open to
+    an account flagged must_change_password. On success the flag is cleared
+    and every existing session is invalidated, so the caller must log in
+    again with the new password.
+    """
+    row = await fetchrow_query(
+        "SELECT password_hash FROM users WHERE id = ?", current_user["id"]
+    )
+    if not row or not verify_password(body.current_password, row["password_hash"]):
+        return LoginResponse(success=False, message="Current password is incorrect")
+
+    problem = validate_new_password(body.new_password, body.current_password)
+    if problem:
+        return LoginResponse(success=False, message=problem)
+
+    await execute_query(
+        "UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?",
+        hash_password(body.new_password), current_user["id"],
+    )
+    await invalidate_all_sessions(current_user["id"])
+    logger.info("Password changed", extra={"event": "password_changed", "user_id": current_user["id"]})
+    return LoginResponse(success=True, message="Password changed. Please log in again.")
