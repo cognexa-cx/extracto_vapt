@@ -37,15 +37,17 @@ STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 # logged-in session/device key (checked via header, for API-style callers)
 # OR a valid, not-yet-expired signature on the URL itself (checked via
 # query string, for a plain <img src="..."> tag, which can't attach a
-# header). Reuses JWT_SECRET rather than a second secret — same trust
-# boundary, no new env var. Mirrors the identical fix in Cloud Backend.
+# header). Signed with the dedicated IMAGE_SIGNING_SECRET, deliberately NOT
+# JWT_SECRET, so the two can be rotated and disclosed independently (SCR-13).
 # ─────────────────────────────────────────────────────────────────────────
 _SIGNATURE_TTL_SECONDS = 6 * 60 * 60  # 6h
 
 
 def _signature_for(relative_path: str, expires_at: int) -> str:
     message = f"{relative_path}:{expires_at}".encode("utf-8")
-    return hmac.new(config.JWT_SECRET.encode("utf-8"), message, hashlib.sha256).hexdigest()
+    return hmac.new(
+        config.IMAGE_SIGNING_SECRET.encode("utf-8"), message, hashlib.sha256
+    ).hexdigest()
 
 
 def verify_signature(relative_path: str, expires_at: str | None, signature: str | None) -> bool:

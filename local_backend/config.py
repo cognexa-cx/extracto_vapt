@@ -11,6 +11,8 @@ BASE_REQUIRED_VARS = [
     # Auth
     "JWT_SECRET",
     "DEVICE_API_KEY",
+    # Dedicated HMAC key for signed image URLs (SCR-13) -- never JWT_SECRET.
+    "IMAGE_SIGNING_SECRET",
     # PII field-level encryption (users/extraction_records/manual_entry_records
     # etc.) — see services/encryption.py.
     "ENCRYPTION_KEY",
@@ -97,6 +99,13 @@ def _require_strong_secret(name: str, value: str) -> None:
 
 
 _require_strong_secret("JWT_SECRET", JWT_SECRET)
+
+# SCR-13: signed image URLs use their own key so JWT and image-link secrets
+# can be stored, rotated and disclosed independently.
+IMAGE_SIGNING_SECRET = os.getenv("IMAGE_SIGNING_SECRET")
+_require_strong_secret("IMAGE_SIGNING_SECRET", IMAGE_SIGNING_SECRET)
+if IMAGE_SIGNING_SECRET == JWT_SECRET:
+    raise RuntimeError("IMAGE_SIGNING_SECRET must be different from JWT_SECRET.")
 
 # Access tokens are short-lived by design — POST /login and POST /refresh
 # both hand back a refresh token alongside this that the frontend uses to
