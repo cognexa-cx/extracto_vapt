@@ -83,6 +83,21 @@ LOCAL_STORAGE_BASE_URL = os.getenv("LOCAL_STORAGE_BASE_URL", "").rstrip("/")
 JWT_SECRET    = os.getenv("JWT_SECRET")
 JWT_ALGORITHM = "HS256"
 
+# SCR-05: HS256 is only as strong as its secret -- refuse to start with a
+# short or obviously placeholder value. Generate with
+#   python -c "import secrets; print(secrets.token_urlsafe(48))"
+MIN_SECRET_BYTES = 32
+
+
+def _require_strong_secret(name: str, value: str) -> None:
+    if len(value.encode("utf-8")) < MIN_SECRET_BYTES:
+        raise RuntimeError(f"{name} must contain at least {MIN_SECRET_BYTES} random bytes.")
+    if value.lower().startswith(("replace_with", "change_me", "changeme")):
+        raise RuntimeError(f"{name} is still a placeholder value; generate a real random secret.")
+
+
+_require_strong_secret("JWT_SECRET", JWT_SECRET)
+
 # Access tokens are short-lived by design — POST /login and POST /refresh
 # both hand back a refresh token alongside this that the frontend uses to
 # get a new access token silently when this one expires, rather than
