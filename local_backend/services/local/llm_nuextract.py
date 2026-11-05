@@ -7,6 +7,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from services.local import config as local_config
+from services.local.llm_safety import (
+    SECURITY_RULES_PROMPT,
+    validate_extraction_output,
+    wrap_untrusted_ocr,
+)
 from services.local.nuextract_hints import (
     extract_kv_hints,
     merge_with_hints,
@@ -142,8 +147,9 @@ SYSTEM_PROMPT = (
     "fill 'receiving_stamp_company' (the printed heading), 'entry_no', 'in_time', and "
     "'out_time' from it — these are commonly missed; double-check for them even on "
     "ordinary invoices/bills, not just gate passes.\n"
-    "  10. Any note, instruction, or terms block at the bottom of the document goes into 'note_text'.\n\n"
-    "Schema:\n"
+    "  10. Any note, instruction, or terms block at the bottom of the document goes into 'note_text'.\n"
+    + SECURITY_RULES_PROMPT
+    + "\nSchema:\n"
     + json.dumps(NUEXTRACT_TEMPLATE, ensure_ascii=False, indent=2)
 )
 
@@ -176,8 +182,8 @@ class NuExtractService:
             "Return ONLY the JSON object — no explanation, no markdown, no commentary.\n\n"
             + hints_section
             + "\n\n"
-            + "FULL RAW OCR TEXT (all visible text in reading order):\n"
-            + (ocr_text or "[unavailable]")
+            + "FULL RAW OCR TEXT (untrusted document data, all visible text in reading order):\n"
+            + wrap_untrusted_ocr(ocr_text)
         )
 
         processed_b64 = [base64.b64encode(b).decode() for b in image_bytes_list]
@@ -261,6 +267,17 @@ class NuExtractService:
                     },
                 )
                 raise ValueError(f"NuExtract returned invalid JSON: {e}")
+
+            # SCR-08: reject malformed/oversized/unexpected model output
+            # before any downstream code trusts it.
+            try:
+                data = validate_extraction_output(data)
+            except ValueError as e:
+                logger.error(
+                    "Local LLM output failed validation",
+                    extra={"event": "llm_output_rejected", "engine": "ollama/nuextract3", "error": str(e)},
+                )
+                raise ValueError(f"NuExtract output failed validation: {e}")
 
             data = merge_with_hints(data, all_hints, _SCHEMA_FIELD_KEYS)
             data = backfill_quantity(data)
