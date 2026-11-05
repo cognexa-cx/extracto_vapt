@@ -17,6 +17,7 @@ MANUAL mode:
 import hashlib
 import hmac
 import logging
+import os
 import time
 import uuid
 from datetime import datetime
@@ -78,6 +79,44 @@ def _public_url(relative_path: str) -> str:
     return f"/images/{relative_path}"
 
 
+# ── At-rest encryption of stored images (SCR-12) ────────────────────────────
+# File layout when enabled: MAGIC (6) | nonce (12) | AES-256-GCM ciphertext+tag.
+# The relative path is bound as associated data so a file copied to another
+# path fails authentication. Files without MAGIC are legacy plaintext.
+_ENC_MAGIC = b"EXENC1"
+_NONCE_LEN = 12
+
+
+def encrypt_file_bytes(data: bytes, relative_path: str) -> bytes:
+    """Return `data` unchanged when STORAGE_ENCRYPTION_KEY isn't configured."""
+    if not config.STORAGE_ENCRYPTION_KEY:
+        return data
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    nonce = os.urandom(_NONCE_LEN)
+    ct = AESGCM(config.STORAGE_ENCRYPTION_KEY).encrypt(nonce, data, relative_path.encode("utf-8"))
+    return _ENC_MAGIC + nonce + ct
+
+
+def decrypt_file_bytes(blob: bytes, relative_path: str) -> bytes:
+    """Decrypt a stored file; legacy plaintext (no MAGIC) is returned as-is.
+    Raises ValueError if the file is encrypted but can't be authenticated."""
+    if not blob.startswith(_ENC_MAGIC):
+        return blob
+    if not config.STORAGE_ENCRYPTION_KEY:
+        raise ValueError("Stored image is encrypted but STORAGE_ENCRYPTION_KEY is not configured")
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    body = blob[len(_ENC_MAGIC):]
+    try:
+        return AESGCM(config.STORAGE_ENCRYPTION_KEY).decrypt(
+            body[:_NONCE_LEN], body[_NONCE_LEN:], relative_path.encode("utf-8")
+        )
+    except InvalidTag as e:
+        raise ValueError("Stored image failed authentication") from e
+
+
 def _write_file(relative_path: str, file_bytes: bytes) -> str:
     """Write bytes to STORAGE_ROOT/relative_path and return its public URL."""
     full_path = (STORAGE_ROOT / relative_path).resolve()
@@ -88,7 +127,7 @@ def _write_file(relative_path: str, file_bytes: bytes) -> str:
     if STORAGE_ROOT not in full_path.parents and full_path != STORAGE_ROOT:
         raise ValueError(f"Refusing to write outside storage root: {relative_path}")
     full_path.parent.mkdir(parents=True, exist_ok=True)
-    full_path.write_bytes(file_bytes)
+    full_path.write_bytes(encrypt_file_bytes(file_bytes, Path(relative_path).as_posix().lstrip("/")))
     url = _public_url(relative_path)
     logger.info(f"Saved file: {relative_path}")
     return url

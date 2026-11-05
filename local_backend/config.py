@@ -76,6 +76,24 @@ MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 # local_app.py — no cloud storage account involved.
 LOCAL_STORAGE_DIR = os.getenv("LOCAL_STORAGE_DIR", "./storage")
 
+# SCR-12: optional application-level encryption of stored images (AES-256-GCM,
+# fresh random nonce per file). Provide a base64-encoded 32-byte key that is
+# managed OUTSIDE the storage directory/backups:
+#   python -c "import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+# Preferred alternative/addition: mount LOCAL_STORAGE_DIR on an encrypted volume
+# with restricted permissions. Files written before this is enabled stay
+# readable (served as legacy plaintext) until re-saved.
+import base64 as _b64_storage
+STORAGE_ENCRYPTION_KEY = None
+_raw_storage_key = os.getenv("STORAGE_ENCRYPTION_KEY")
+if _raw_storage_key:
+    try:
+        STORAGE_ENCRYPTION_KEY = _b64_storage.b64decode(_raw_storage_key, validate=True)
+    except Exception as _e:
+        raise RuntimeError(f"STORAGE_ENCRYPTION_KEY must be valid base64: {_e}")
+    if len(STORAGE_ENCRYPTION_KEY) != 32:
+        raise RuntimeError("STORAGE_ENCRYPTION_KEY must decode to exactly 32 bytes (AES-256-GCM).")
+
 # Base URL the server advertises for image links it hands back to the
 # frontend (e.g. http://192.168.10.213:8002). Falls back to a relative path
 # so it still works behind a reverse proxy that doesn't set this.

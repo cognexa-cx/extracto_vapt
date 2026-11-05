@@ -27,7 +27,7 @@ import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -184,7 +184,20 @@ async def serve_image(
     if (root not in target.parents and target != root) or not target.is_file():
         raise HTTPException(status_code=404, detail="Not found")
 
-    return FileResponse(target)
+    # SCR-12: images may be encrypted at rest — decrypt before serving.
+    # (Legacy plaintext files pass through unchanged.)
+    import mimetypes
+    from fastapi.responses import Response
+    from services.storage import decrypt_file_bytes
+
+    relative = target.relative_to(root).as_posix()
+    try:
+        data = decrypt_file_bytes(target.read_bytes(), relative)
+    except ValueError:
+        logger.error("Stored image could not be decrypted", extra={"event": "image_decrypt_failed", "path": relative})
+        raise HTTPException(status_code=500, detail="Image unavailable")
+    media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    return Response(content=data, media_type=media_type)
 
 
 # Serve the prebuilt admin dashboard (static/web/index.html + assets) —
