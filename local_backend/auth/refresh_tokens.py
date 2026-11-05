@@ -24,34 +24,54 @@ async def issue_refresh_token(user_id: str) -> str:
     return raw_token
 
 
+# Single T-SQL batch that consumes the presented token and inserts its
+# successor atomically (SCR-01). The UPDATE ... OUTPUT only returns a row
+# for the ONE request that flips revoked_at from NULL, so two concurrent
+# requests presenting the same token can never both obtain a successor.
+# XACT_ABORT + an explicit transaction make the revoke and the successor
+# insert commit (or roll back) together; NOCOUNT keeps the final SELECT
+# as the only result set.
+_ROTATE_SQL = """
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+DECLARE @consumed TABLE (user_id VARCHAR(100));
+BEGIN TRANSACTION;
+UPDATE refresh_tokens
+SET revoked_at = SYSUTCDATETIME()
+OUTPUT INSERTED.user_id INTO @consumed
+WHERE token_hash = ?
+  AND revoked_at IS NULL
+  AND expires_at > SYSUTCDATETIME();
+INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
+SELECT user_id, ?, ? FROM @consumed;
+COMMIT TRANSACTION;
+SELECT user_id FROM @consumed;
+"""
+
+
 async def validate_and_rotate(raw_token: str) -> tuple[str, str] | None:
     """
-    Look up a refresh token by hash; if it's valid (exists, not expired,
-    not already revoked), revoke it and issue a replacement in the same
-    call — rotation means a refresh token is single-use, so a stolen and
-    replayed old refresh token fails (already revoked) instead of
+    Atomically consume a refresh token (it must exist, be unexpired and not
+    already revoked) and issue its single-use replacement — rotation means a
+    stolen and replayed old refresh token fails (already revoked) instead of
     silently working forever.
+
+    Consumption and successor insertion happen in one transaction, so two
+    concurrent requests with the same token cannot both succeed.
 
     Returns (user_id, new_raw_refresh_token) on success, None on failure.
     """
-    token_hash = hash_refresh_token(raw_token)
+    new_raw_token = generate_refresh_token()
+    new_expires_at = datetime.now(timezone.utc) + timedelta(days=config.REFRESH_TOKEN_EXPIRE_DAYS)
     row = await fetchrow_query(
-        "SELECT * FROM refresh_tokens WHERE token_hash = ?", token_hash
+        _ROTATE_SQL,
+        hash_refresh_token(raw_token),
+        hash_refresh_token(new_raw_token),
+        new_expires_at,
     )
-    if not row or row["revoked_at"] is not None:
+    if not row:
         return None
-
-    expires_at = row["expires_at"]
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < datetime.now(timezone.utc):
-        return None
-
-    await execute_query(
-        "UPDATE refresh_tokens SET revoked_at = GETUTCDATE() WHERE id = ?", row["id"]
-    )
-    new_token = await issue_refresh_token(row["user_id"])
-    return row["user_id"], new_token
+    return row["user_id"], new_raw_token
 
 
 async def revoke_refresh_token(raw_token: str) -> None:

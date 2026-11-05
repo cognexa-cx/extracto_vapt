@@ -66,6 +66,58 @@ class AuthService {
   }
 
   /**
+   * True when the logged-in account is flagged must_change_password by the
+   * backend (SCR-02) — it can't reach any other API until it sets a new
+   * password via changePassword().
+   */
+  requiresPasswordChange() {
+    return this.getUser()?.must_change_password === true;
+  }
+
+  /**
+   * Set a new password for the logged-in account (POST /change-password).
+   * On success the backend invalidates every session for the account, so
+   * local auth state is cleared and the caller must send the user back to
+   * the login screen.
+   */
+  async changePassword(currentPassword, newPassword) {
+    const token = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    if (!token) {
+      throw new Error("Your session has expired. Please log in again.");
+    }
+    let response;
+    try {
+      response = await fetch(`${API_BASE_URL}/change-password`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword,
+        }),
+      });
+    } catch {
+      throw new Error("Network error. Please check your connection");
+    }
+    if (response.status === 429) {
+      throw new Error("Too many attempts. Please wait a minute and try again.");
+    }
+    if (response.status === 401) {
+      localStorage.clear();
+      throw new Error("Your session has expired. Please log in again.");
+    }
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || data.detail || "Could not change password");
+    }
+    localStorage.clear();
+    return data.message || "Password changed. Please log in again.";
+  }
+
+  /**
    * Trade the refresh token — held in an httpOnly cookie the browser sends
    * automatically, never read or set by this code — for a new access
    * token. Called by api.ts's response interceptor when a request comes

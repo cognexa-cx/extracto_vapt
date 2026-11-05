@@ -8,7 +8,8 @@ import uuid
 
 import config
 from auth.security import hash_password, verify_password
-from database.connection import execute_query, fetchrow_query
+from auth.refresh_tokens import invalidate_all_sessions
+from database.connection import execute_query, fetch_query, fetchrow_query
 from services.pii import encrypt_row_fields
 
 logger = logging.getLogger(__name__)
@@ -35,34 +36,45 @@ def _case_variants(value: str) -> set[str]:
     return {value, value.lower(), value.upper(), value.title()}
 
 
-async def _warn_if_admin_still_uses_a_placeholder_password() -> None:
+def is_placeholder_password(password: str) -> bool:
+    """True if `password` is one of the known publicly-documented placeholders."""
+    lowered = password.strip().lower()
+    return lowered in {p.lower() for p in _KNOWN_PLACEHOLDER_PASSWORDS}
+
+
+async def _enforce_password_change_if_admin_uses_a_placeholder_password() -> None:
     """
     Runs every startup regardless of whether seeding happens this time —
-    catches the case (true of this project's own local deployment as of
-    this fix) where the admin account was already seeded with a placeholder
-    password *before* seed_admin_user() started refusing to do that. There's
-    no forced-password-change route on this backend yet, so this can only
-    warn loudly, not block login — but a warning on every single startup is
-    hard to miss.
+    catches an admin account that was seeded with a placeholder password
+    before seed_admin_user() started refusing to do that (SCR-02).
+
+    Instead of only logging, the account is flagged must_change_password and
+    all of its sessions are revoked: it can no longer reach any privileged
+    endpoint until POST /api/usermanagement/change-password succeeds
+    (enforced server-side in auth/dependencies.py).
     """
-    admin_row = await fetchrow_query(
-        "SELECT TOP 1 password_hash FROM users WHERE role = 'Admin' ORDER BY created_at ASC"
+    admin_rows = await fetch_query(
+        "SELECT id, password_hash, must_change_password FROM users WHERE role = 'Admin'"
     )
-    if not admin_row:
-        return
     candidates = {v for p in _KNOWN_PLACEHOLDER_PASSWORDS for v in _case_variants(p)}
-    for candidate in candidates:
-        if verify_password(candidate, admin_row["password_hash"]):
-            logger.error(
-                "SECURITY WARNING: the Admin account's password is still a known "
-                "placeholder value. Log in and change it immediately — this "
-                "warning will repeat on every startup until it's changed."
+    for admin_row in admin_rows:
+        if admin_row["must_change_password"]:
+            continue
+        if any(verify_password(c, admin_row["password_hash"]) for c in candidates):
+            await execute_query(
+                "UPDATE users SET must_change_password = 1 WHERE id = ?", admin_row["id"]
             )
-            return
+            await invalidate_all_sessions(admin_row["id"])
+            logger.error(
+                "SECURITY: an Admin account's password is a known placeholder value. "
+                "The account is now locked to the change-password endpoint until a "
+                "strong password is set.",
+                extra={"event": "admin_placeholder_password_locked", "user_id": admin_row["id"]},
+            )
 
 
 async def seed_admin_user() -> None:
-    await _warn_if_admin_still_uses_a_placeholder_password()
+    await _enforce_password_change_if_admin_uses_a_placeholder_password()
 
     if not config.SEED_ADMIN_EMAIL or not config.SEED_ADMIN_PASSWORD:
         return
@@ -71,7 +83,7 @@ async def seed_admin_user() -> None:
     if existing_any:
         return
 
-    if config.SEED_ADMIN_PASSWORD.strip().lower() in {p.lower() for p in _KNOWN_PLACEHOLDER_PASSWORDS}:
+    if is_placeholder_password(config.SEED_ADMIN_PASSWORD):
         logger.error(
             "SEED_ADMIN_PASSWORD is still set to a known placeholder value "
             "(e.g. from .env.example) — refusing to seed the admin account "

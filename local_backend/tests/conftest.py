@@ -16,6 +16,10 @@ import pytest
 BASE_URL = os.getenv("TEST_BASE_URL", "http://localhost:8002")
 SEED_EMAIL = os.getenv("TEST_ADMIN_EMAIL", "admin@example.com")
 SEED_PASSWORD = os.getenv("TEST_ADMIN_PASSWORD", "CHANGE_ME_ON_FIRST_LOGIN")
+# Per-device credential (SCR-04): register a device via POST /api/devices as an
+# Admin and export its id/key. The deprecated shared key still works only if the
+# server runs with ALLOW_LEGACY_SHARED_DEVICE_KEY=yes (TEST_DEVICE_API_KEY).
+DEVICE_ID = os.getenv("TEST_DEVICE_ID")
 DEVICE_API_KEY = os.getenv("TEST_DEVICE_API_KEY", "CHANGE_ME_TO_A_LONG_RANDOM_SECRET")
 
 
@@ -46,4 +50,7 @@ def auth_headers(admin_token):
 
 @pytest.fixture(scope="session")
 def device_headers():
-    return {"X-Device-Key": DEVICE_API_KEY}
+    headers = {"X-Device-Key": DEVICE_API_KEY}
+    if DEVICE_ID:
+        headers["X-Device-Id"] = DEVICE_ID
+    return headers

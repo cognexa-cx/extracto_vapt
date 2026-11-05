@@ -17,12 +17,13 @@ MANUAL mode:
 import hashlib
 import hmac
 import logging
+import os
 import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import config
 
@@ -37,15 +38,17 @@ STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 # logged-in session/device key (checked via header, for API-style callers)
 # OR a valid, not-yet-expired signature on the URL itself (checked via
 # query string, for a plain <img src="..."> tag, which can't attach a
-# header). Reuses JWT_SECRET rather than a second secret — same trust
-# boundary, no new env var. Mirrors the identical fix in Cloud Backend.
+# header). Signed with the dedicated IMAGE_SIGNING_SECRET, deliberately NOT
+# JWT_SECRET, so the two can be rotated and disclosed independently (SCR-13).
 # ─────────────────────────────────────────────────────────────────────────
 _SIGNATURE_TTL_SECONDS = 6 * 60 * 60  # 6h
 
 
 def _signature_for(relative_path: str, expires_at: int) -> str:
     message = f"{relative_path}:{expires_at}".encode("utf-8")
-    return hmac.new(config.JWT_SECRET.encode("utf-8"), message, hashlib.sha256).hexdigest()
+    return hmac.new(
+        config.IMAGE_SIGNING_SECRET.encode("utf-8"), message, hashlib.sha256
+    ).hexdigest()
 
 
 def verify_signature(relative_path: str, expires_at: str | None, signature: str | None) -> bool:
@@ -59,6 +62,14 @@ def verify_signature(relative_path: str, expires_at: str | None, signature: str 
         return False
     expected = _signature_for(relative_path, expires_at_int)
     return hmac.compare_digest(expected, signature)
+
+
+def _redacted_path(url: str) -> str:
+    """Path portion of a URL with the query string (exp/sig) removed."""
+    try:
+        return urlsplit(url).path
+    except Exception:
+        return "[unparseable]"
 
 
 def safe_filename(filename: str) -> str:
@@ -76,6 +87,44 @@ def _public_url(relative_path: str) -> str:
     return f"/images/{relative_path}"
 
 
+# ── At-rest encryption of stored images (SCR-12) ────────────────────────────
+# File layout when enabled: MAGIC (6) | nonce (12) | AES-256-GCM ciphertext+tag.
+# The relative path is bound as associated data so a file copied to another
+# path fails authentication. Files without MAGIC are legacy plaintext.
+_ENC_MAGIC = b"EXENC1"
+_NONCE_LEN = 12
+
+
+def encrypt_file_bytes(data: bytes, relative_path: str) -> bytes:
+    """Return `data` unchanged when STORAGE_ENCRYPTION_KEY isn't configured."""
+    if not config.STORAGE_ENCRYPTION_KEY:
+        return data
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    nonce = os.urandom(_NONCE_LEN)
+    ct = AESGCM(config.STORAGE_ENCRYPTION_KEY).encrypt(nonce, data, relative_path.encode("utf-8"))
+    return _ENC_MAGIC + nonce + ct
+
+
+def decrypt_file_bytes(blob: bytes, relative_path: str) -> bytes:
+    """Decrypt a stored file; legacy plaintext (no MAGIC) is returned as-is.
+    Raises ValueError if the file is encrypted but can't be authenticated."""
+    if not blob.startswith(_ENC_MAGIC):
+        return blob
+    if not config.STORAGE_ENCRYPTION_KEY:
+        raise ValueError("Stored image is encrypted but STORAGE_ENCRYPTION_KEY is not configured")
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    body = blob[len(_ENC_MAGIC):]
+    try:
+        return AESGCM(config.STORAGE_ENCRYPTION_KEY).decrypt(
+            body[:_NONCE_LEN], body[_NONCE_LEN:], relative_path.encode("utf-8")
+        )
+    except InvalidTag as e:
+        raise ValueError("Stored image failed authentication") from e
+
+
 def _write_file(relative_path: str, file_bytes: bytes) -> str:
     """Write bytes to STORAGE_ROOT/relative_path and return its public URL."""
     full_path = (STORAGE_ROOT / relative_path).resolve()
@@ -86,7 +135,7 @@ def _write_file(relative_path: str, file_bytes: bytes) -> str:
     if STORAGE_ROOT not in full_path.parents and full_path != STORAGE_ROOT:
         raise ValueError(f"Refusing to write outside storage root: {relative_path}")
     full_path.parent.mkdir(parents=True, exist_ok=True)
-    full_path.write_bytes(file_bytes)
+    full_path.write_bytes(encrypt_file_bytes(file_bytes, Path(relative_path).as_posix().lstrip("/")))
     url = _public_url(relative_path)
     logger.info(f"Saved file: {relative_path}")
     return url
@@ -210,7 +259,9 @@ class StorageService:
             idx = url.find(marker)
             if idx == -1:
                 return False
-            relative_path = url[idx + len(marker):]
+            # SCR-17: drop any query string (exp/sig of a signed URL) so the
+            # signature is never used as part of the path or written to logs.
+            relative_path = urlsplit(url[idx + len(marker):]).path
             file_path = (STORAGE_ROOT / relative_path).resolve()
             if STORAGE_ROOT not in file_path.parents and file_path != STORAGE_ROOT:
                 logger.warning(f"Refusing to delete outside storage root: {relative_path}")
@@ -221,7 +272,16 @@ class StorageService:
                 return True
             return False
         except Exception as e:
-            logger.warning(f"Could not delete file from URL {url}: {e}")
+            # SCR-17: never log the URL itself (it may carry a bearer-style
+            # signature); log only the redacted path and the error type.
+            logger.warning(
+                "Could not delete stored image",
+                extra={
+                    "event": "storage_delete_failed",
+                    "path": _redacted_path(url),
+                    "error_type": type(e).__name__,
+                },
+            )
             return False
 
     @staticmethod

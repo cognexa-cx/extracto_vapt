@@ -160,6 +160,12 @@ api.interceptors.response.use(
           // request that already went through one retry above.
           break;
         case 403:
+          // SCR-02: the backend blocks flagged accounts from every API
+          // except /change-password and signals it with this header.
+          if (error.response.headers?.["x-password-change-required"]) {
+            window.location.href = "/change-password";
+            break;
+          }
           console.error("❌ Forbidden:", data?.message);
           break;
         case 404:

@@ -40,7 +40,7 @@ def create_access_token(user_id: str, email: str, role: str, token_version: int)
         "email": email,
         "role": role,
         "tv": token_version,
-        "iat": int(time.mktime(now.timetuple())),
+        "iat": int(now.timestamp()),
         "exp": now + timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES),
     }
     return jwt.encode(payload, config.JWT_SECRET, algorithm=config.JWT_ALGORITHM)
@@ -65,3 +65,21 @@ def hash_refresh_token(raw_token: str) -> str:
     so there's no brute-forceable keyspace for a slow hash to defend
     against — the entropy IS the defense."""
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+MIN_PASSWORD_LENGTH = 12
+
+
+def validate_new_password(new_password: str, current_password: str) -> str | None:
+    """Return an error message if `new_password` is unacceptable, else None."""
+    from auth.seed import is_placeholder_password  # local import: avoid cycle
+
+    if len(new_password) < MIN_PASSWORD_LENGTH:
+        return f"New password must be at least {MIN_PASSWORD_LENGTH} characters."
+    if new_password == current_password:
+        return "New password must differ from the current password."
+    if is_placeholder_password(new_password):
+        return "New password must not be a known placeholder value."
+    if not (any(c.isalpha() for c in new_password) and any(c.isdigit() for c in new_password)):
+        return "New password must contain both letters and digits."
+    return None

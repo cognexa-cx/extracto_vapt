@@ -8,6 +8,26 @@ logger = logging.getLogger(__name__)
 _pool: aioodbc.Pool | None = None
 
 
+def _looks_like_ciphertext(value: str) -> bool:
+    """True if `value` has the shape of our stored ciphertext (strict base64 of
+    at least the 16-byte SIV tag plus one byte). A value like this that does not
+    decrypt was encrypted with a DIFFERENT key; encrypting it again would bury it
+    under a second layer and destroy the data, so the migration must stop."""
+    import base64
+    import binascii
+    try:
+        return len(base64.b64decode(value, validate=True)) > 16
+    except (binascii.Error, ValueError):
+        return False
+
+
+def _refuse_foreign_ciphertext(table: str, column: str, pk) -> None:
+    raise RuntimeError(
+        f"{table}.{column} (row {pk}) looks encrypted but cannot be decrypted with the "
+        "current ENCRYPTION_KEY. Wrong key? Refusing to double-encrypt."
+    )
+
+
 async def _migrate_encrypt_table_pii(table: str, pk_column: str) -> None:
     """Per-table encryption migration for any table registered in
     services.pii.TABLE_PII_COLUMNS. Checks each registered column
@@ -35,6 +55,8 @@ async def _migrate_encrypt_table_pii(table: str, pk_column: str) -> None:
             try:
                 decrypt_field(value, column)
             except DecryptionError:
+                if _looks_like_ciphertext(value):
+                    _refuse_foreign_ciphertext(table, column, row[pk_column])
                 to_encrypt[column] = value
 
         if not to_encrypt:
@@ -69,7 +91,10 @@ async def _migrate_encrypt_extraction_record_pages_pii() -> None:
             decrypt_field(value, "image_url")
             continue  # already encrypted
         except DecryptionError:
-            pass
+            if _looks_like_ciphertext(value):
+                _refuse_foreign_ciphertext(
+                    "extraction_record_pages", "image_url", f"{row['record_id']}/{row['page_index']}"
+                )
 
         encrypted = encrypt_row_fields("extraction_record_pages", image_url=value)
         await execute_query(
@@ -80,6 +105,14 @@ async def _migrate_encrypt_extraction_record_pages_pii() -> None:
             f"Encrypted legacy PII for extraction_record_pages row {row['record_id']}/{row['page_index']}",
             extra={"event": "pii_migration_row_encrypted", "table": "extraction_record_pages"},
         )
+
+
+async def run_pii_migrations() -> None:
+    """Encrypt any legacy plaintext in every registered PII column. Raises on
+    the first failure so the caller can abort startup (SCR-09)."""
+    for table, pk in (("users", "id"), ("extraction_records", "id"), ("manual_entry_records", "id")):
+        await _migrate_encrypt_table_pii(table, pk)
+    await _migrate_encrypt_extraction_record_pages_pii()
 
 
 async def init_pool() -> aioodbc.Pool:
@@ -96,7 +129,14 @@ async def init_pool() -> aioodbc.Pool:
     if config.SQL_SERVER_PASSWORD:
         conn_parts.append(f"Pwd={config.SQL_SERVER_PASSWORD}")
     conn_parts.append("Encrypt=yes")
-    conn_parts.append("TrustServerCertificate=yes")
+    # SCR-03: validate the server certificate (chain + hostname). The host in
+    # SQL_SERVER_HOST must match the certificate subject/SAN, and the issuing
+    # CA must be in the OS trust store.
+    conn_parts.append(f"TrustServerCertificate={config.SQL_SERVER_TRUST_CERT}")
+    if config.SQL_SERVER_TRUST_CERT == "yes":
+        logger.warning(
+            "SQL_SERVER_TRUST_CERT=yes: SQL Server certificate validation is DISABLED."
+        )
     conn_parts.append("Connection Timeout=30")
 
     dsn = ";".join(conn_parts)
@@ -121,7 +161,9 @@ async def init_pool() -> aioodbc.Pool:
         await execute_query(_CREATE_EXTRACTION_RECORD_PAGES_TABLE_SQL)
         await execute_query(_CREATE_USERS_TABLE_SQL)
         await execute_query(_ADD_TOKEN_VERSION_COLUMN_SQL)
+        await execute_query(_ADD_MUST_CHANGE_PASSWORD_COLUMN_SQL)
         await execute_query(_CREATE_REFRESH_TOKENS_TABLE_SQL)
+        await execute_query(_CREATE_DEVICES_TABLE_SQL)
         await execute_query(_WIDEN_PII_COLUMNS_SQL)
         logger.info(
             "✅ Schema verified / created (extraction_records + manual_entry_records + "
@@ -133,16 +175,20 @@ async def init_pool() -> aioodbc.Pool:
             "Assuming tables already exist or database user lacks DDL permissions."
         )
 
-    for table, pk in (("users", "id"), ("extraction_records", "id"), ("manual_entry_records", "id")):
-        try:
-            await _migrate_encrypt_table_pii(table, pk)
-        except Exception as e:
-            logger.warning(f"⚠️ {table} PII encryption migration skipped: {e}")
-
+    # SCR-09: a failed PII encryption migration must NOT let the app come up
+    # serving legacy plaintext as if it were protected. Any failure aborts
+    # startup (after releasing the pool); fix the cause and restart.
     try:
-        await _migrate_encrypt_extraction_record_pages_pii()
+        await run_pii_migrations()
     except Exception as e:
-        logger.warning(f"⚠️ extraction_record_pages PII encryption migration skipped: {e}")
+        logger.critical(
+            f"PII encryption migration failed -- refusing to start: {e}",
+            extra={"event": "pii_migration_failed"},
+        )
+        _pool.close()
+        await _pool.wait_closed()
+        _pool = None
+        raise RuntimeError(f"PII encryption migration incomplete; refusing startup: {e}") from e
 
     # Opportunistic cleanup of abandoned pending sessions (extract() called but
     # never approved/rejected) so they don't accumulate indefinitely.
@@ -380,6 +426,36 @@ IF NOT EXISTS (
 )
 BEGIN
     ALTER TABLE users ADD token_version INT NOT NULL DEFAULT 1;
+END
+"""
+
+# SCR-02: when set, the account may only call the change-password endpoint
+# (enforced server-side in auth/dependencies.py) until a new password is set.
+_ADD_MUST_CHANGE_PASSWORD_COLUMN_SQL = """
+IF NOT EXISTS (
+    SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_NAME = 'users' AND COLUMN_NAME = 'must_change_password'
+)
+BEGIN
+    ALTER TABLE users ADD must_change_password BIT NOT NULL DEFAULT 0;
+END
+"""
+
+# SCR-04: one row per physical kiosk/tablet, each with its own credential.
+# Only a SHA-256 hash of the (256-bit random) key is stored, never the key.
+# Devices can be revoked individually and expire automatically.
+_CREATE_DEVICES_TABLE_SQL = """
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='devices' and xtype='U')
+BEGIN
+    CREATE TABLE devices (
+        id            VARCHAR(100) PRIMARY KEY,
+        name          VARCHAR(200) NOT NULL,
+        key_hash      VARCHAR(64) NOT NULL,
+        created_at    DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+        expires_at    DATETIME2 NOT NULL,
+        revoked_at    DATETIME2 NULL,
+        last_used_at  DATETIME2 NULL
+    )
 END
 """
 

@@ -9,7 +9,11 @@ from auth.rate_limit import limiter
 from models import ExtractionResponse
 from services import session_store
 from services.local.registry import LOCAL_COMBINATIONS
-from services.upload_validation import validate_image_bytes
+from services.upload_validation import (
+    UploadTooLargeError,
+    read_limited_upload,
+    validate_image_bytes,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/local")
@@ -108,9 +112,12 @@ async def local_extract(
     )
 
     try:
-        challan_bytes_list = [await f.read() for f in challan_images]
-        front_bytes = await vehicle_front_image.read()
-        back_bytes  = await vehicle_back_image.read()
+        try:
+            challan_bytes_list = [await read_limited_upload(f) for f in challan_images]
+            front_bytes = await read_limited_upload(vehicle_front_image)
+            back_bytes  = await read_limited_upload(vehicle_back_image)
+        except UploadTooLargeError as e:
+            return ExtractionResponse(success=False, validation_messages=[str(e)])
 
         if not any(challan_bytes_list):
             return ExtractionResponse(

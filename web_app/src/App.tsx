@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import Layout from "./components/layout/Layout";
 import Login from "./pages/Login";
 import OTPVerification from "./pages/OTPVerification";
+import ChangePassword from "./pages/ChangePassword";
 import Dashboard from "./pages/Dashboard";
 import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
@@ -28,6 +29,7 @@ function App() {
         {/* Public Routes */}
         <Route path="login" element={<Login />} />
         <Route path="otp-verification" element={<OTPVerification />} />
+        <Route path="change-password" element={<ChangePassword />} />
 
         {/* Protected Routes - With Layout */}
         <Route
