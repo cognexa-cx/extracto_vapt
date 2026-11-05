@@ -21,8 +21,21 @@ Use `local_backend/.env.local.example` as the guide.
 | `REFRESH_TOKEN_EXPIRE_DAYS` | 1 to 30 (default 30) | optional |
 
 Warning: if your `ENCRYPTION_KEY` is 32 or 48 bytes today, changing it makes
-existing encrypted data unreadable. Do **not** just replace it. Talk to the
-developers about re-encrypting the data first.
+existing encrypted data unreadable. Do **not** just replace it. Use the
+re-encryption script instead (take a database backup first):
+
+```bash
+cd local_backend
+export OLD_ENCRYPTION_KEY='<your current key>'
+export NEW_ENCRYPTION_KEY="$(python -c 'import secrets,base64;print(base64.b64encode(secrets.token_bytes(64)).decode())')"
+python scripts/rekey_pii.py            # dry run: changes nothing, shows counts
+python scripts/rekey_pii.py --apply    # does it, all-or-nothing, and verifies
+```
+
+Then put the new key into `.env` as `ENCRYPTION_KEY` and start the app. Save
+the new key somewhere safe (lose it = data unreadable) and keep the old key
+until you have checked that everything works. Check your key size with:
+`python -c "import base64; print(len(base64.b64decode('YOUR_KEY')))"`.
 
 ## 3. Database certificate
 The app now checks the SQL Server certificate.
