@@ -1,0 +1,36 @@
+name: Backend unit tests
+
+# Runs the offline unit tests (no database, server or Ollama needed) on every
+# push to a branch and on every pull request.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: local_backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # aioodbc/pyodbc need native ODBC libraries and are stubbed by
+      # tests/unit/conftest.py, so they are intentionally not installed here.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest==9.1.1 fastapi==0.141.1 httpx==0.28.1 pydantic==2.13.4 \
+            python-dotenv==1.2.3 python-multipart==0.0.32 Pillow==12.3.0 bcrypt==4.2.1 \
+            PyJWT==2.15.0 slowapi==0.1.9 cryptography==50.0.1
+
+      - name: Run unit tests
+        run: python -m pytest tests/unit -q
