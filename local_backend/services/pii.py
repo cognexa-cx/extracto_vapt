@@ -13,7 +13,17 @@ set of tables/columns -- this backend's users table only has email/name,
 no phone_number/emp_name/base_location, and there is no masterdata or
 audit_logs table here at all.
 """
+import logging
+
+import config
 from services.encryption import DecryptionError, decrypt_field, encrypt_field
+
+logger = logging.getLogger(__name__)
+
+
+class PIIIntegrityError(Exception):
+    """Stored PII could not be decrypted (wrong key/context, corruption, or
+    an incomplete migration). Never swallowed on request paths (SCR-14)."""
 
 # table_name -> tuple of column names that hold sensitive data for that
 # table. Column name doubles as the AES-SIV associated-data context, so a
@@ -61,12 +71,15 @@ def decrypt_row(table: str, row: dict) -> dict:
     in `row` replaced by their decrypted plaintext — safe to call on a row
     from a SELECT that only fetched some of them.
 
-    Rows still holding legacy plaintext (not yet migrated) fail to decrypt
-    (DecryptionError) and are returned as-is for that column — see
-    database.connection's per-table _migrate_encrypt_*_pii functions, which
-    are what should actually be converting those rows, not this fallback.
-    This exists so a request landing mid-migration degrades to "shows
-    plaintext" rather than 500ing.
+    Fails closed (SCR-14): a value that cannot be decrypted raises
+    PIIIntegrityError instead of being returned as-is, so a wrong key,
+    corruption or an incomplete migration is visible rather than silently
+    exposing/accepting unverified data. Startup refuses to run with an
+    incomplete migration (database.connection.run_pii_migrations), so on a
+    migrated database this never trips on legitimate data.
+
+    Temporary escape hatch: PII_ALLOW_LEGACY_PLAINTEXT=yes restores the old
+    pass-through behaviour, with a log line per fallback.
     """
     out = dict(row)
     for column in TABLE_PII_COLUMNS.get(table, ()):
@@ -75,6 +88,12 @@ def decrypt_row(table: str, row: dict) -> dict:
             continue
         try:
             out[column] = decrypt_field(value, column)
-        except DecryptionError:
-            pass
+        except DecryptionError as exc:
+            logger.error(
+                "PII decryption failed",
+                extra={"event": "pii_decryption_failure", "table": table, "column": column},
+            )
+            if config.PII_ALLOW_LEGACY_PLAINTEXT:
+                continue
+            raise PIIIntegrityError("Stored PII could not be decrypted") from exc
     return out

@@ -163,6 +163,11 @@ if len(ENCRYPTION_KEY) != 64:
         f"ENCRYPTION_KEY must decode to exactly 64 bytes for AES-256-SIV, got {len(ENCRYPTION_KEY)}."
     )
 
+# SCR-14: by default a PII value that fails to decrypt is an error, never
+# silently returned as-is. Set to "yes" ONLY temporarily while a database is
+# known to still hold legacy plaintext; every fallback is logged.
+PII_ALLOW_LEGACY_PLAINTEXT = os.getenv("PII_ALLOW_LEGACY_PLAINTEXT", "no").strip().lower() == "yes"
+
 # Static shared secret for the kiosk/tablet app (Kalpataru-Extracto-tab),
 # which has no per-user login — it authenticates as a device via the
 # X-Device-Key header instead of a JWT. See auth/dependencies.py.
