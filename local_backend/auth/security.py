@@ -40,7 +40,7 @@ def create_access_token(user_id: str, email: str, role: str, token_version: int)
         "email": email,
         "role": role,
         "tv": token_version,
-        "iat": int(time.mktime(now.timetuple())),
+        "iat": int(now.timestamp()),
         "exp": now + timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES),
     }
     return jwt.encode(payload, config.JWT_SECRET, algorithm=config.JWT_ALGORITHM)
