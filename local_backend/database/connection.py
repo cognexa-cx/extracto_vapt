@@ -8,6 +8,26 @@ logger = logging.getLogger(__name__)
 _pool: aioodbc.Pool | None = None
 
 
+def _looks_like_ciphertext(value: str) -> bool:
+    """True if `value` has the shape of our stored ciphertext (strict base64 of
+    at least the 16-byte SIV tag plus one byte). A value like this that does not
+    decrypt was encrypted with a DIFFERENT key; encrypting it again would bury it
+    under a second layer and destroy the data, so the migration must stop."""
+    import base64
+    import binascii
+    try:
+        return len(base64.b64decode(value, validate=True)) > 16
+    except (binascii.Error, ValueError):
+        return False
+
+
+def _refuse_foreign_ciphertext(table: str, column: str, pk) -> None:
+    raise RuntimeError(
+        f"{table}.{column} (row {pk}) looks encrypted but cannot be decrypted with the "
+        "current ENCRYPTION_KEY. Wrong key? Refusing to double-encrypt."
+    )
+
+
 async def _migrate_encrypt_table_pii(table: str, pk_column: str) -> None:
     """Per-table encryption migration for any table registered in
     services.pii.TABLE_PII_COLUMNS. Checks each registered column
@@ -35,6 +55,8 @@ async def _migrate_encrypt_table_pii(table: str, pk_column: str) -> None:
             try:
                 decrypt_field(value, column)
             except DecryptionError:
+                if _looks_like_ciphertext(value):
+                    _refuse_foreign_ciphertext(table, column, row[pk_column])
                 to_encrypt[column] = value
 
         if not to_encrypt:
@@ -69,7 +91,10 @@ async def _migrate_encrypt_extraction_record_pages_pii() -> None:
             decrypt_field(value, "image_url")
             continue  # already encrypted
         except DecryptionError:
-            pass
+            if _looks_like_ciphertext(value):
+                _refuse_foreign_ciphertext(
+                    "extraction_record_pages", "image_url", f"{row['record_id']}/{row['page_index']}"
+                )
 
         encrypted = encrypt_row_fields("extraction_record_pages", image_url=value)
         await execute_query(
