@@ -32,6 +32,12 @@ SQL_SERVER_DB       = os.getenv("SQL_SERVER_DB", "extracto_db")
 SQL_SERVER_USER     = os.getenv("SQL_SERVER_USER", "")
 SQL_SERVER_PASSWORD = os.getenv("SQL_SERVER_PASSWORD", "")
 SQL_SERVER_DRIVER   = os.getenv("SQL_SERVER_DRIVER", "ODBC Driver 17 for SQL Server")
+# SCR-03: the server certificate is validated (chain + hostname) by default.
+# Set to "yes" ONLY as a temporary escape hatch for a server still using a
+# self-signed certificate; it disables authentication of the SQL Server.
+SQL_SERVER_TRUST_CERT = os.getenv("SQL_SERVER_TRUST_CERT", "no").strip().lower()
+if SQL_SERVER_TRUST_CERT not in ("yes", "no"):
+    raise RuntimeError("SQL_SERVER_TRUST_CERT must be 'yes' or 'no'.")
 
 # ── Runtime environment ───────────────────────────────────────────────────────
 # "production" disables uvicorn's --reload (file-watcher, dev-only) and makes

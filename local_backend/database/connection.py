@@ -96,7 +96,14 @@ async def init_pool() -> aioodbc.Pool:
     if config.SQL_SERVER_PASSWORD:
         conn_parts.append(f"Pwd={config.SQL_SERVER_PASSWORD}")
     conn_parts.append("Encrypt=yes")
-    conn_parts.append("TrustServerCertificate=yes")
+    # SCR-03: validate the server certificate (chain + hostname). The host in
+    # SQL_SERVER_HOST must match the certificate subject/SAN, and the issuing
+    # CA must be in the OS trust store.
+    conn_parts.append(f"TrustServerCertificate={config.SQL_SERVER_TRUST_CERT}")
+    if config.SQL_SERVER_TRUST_CERT == "yes":
+        logger.warning(
+            "SQL_SERVER_TRUST_CERT=yes: SQL Server certificate validation is DISABLED."
+        )
     conn_parts.append("Connection Timeout=30")
 
     dsn = ";".join(conn_parts)
