@@ -135,9 +135,11 @@ except Exception as _e:
     raise RuntimeError(
         f"ENCRYPTION_KEY must be valid base64 (see config.py for how to generate one): {_e}"
     )
-if len(ENCRYPTION_KEY) not in (32, 48, 64):
+# SCR-07: AES-256-SIV needs exactly 64 bytes; 32/48-byte keys silently select
+# the weaker AES-128/192-SIV variants.
+if len(ENCRYPTION_KEY) != 64:
     raise RuntimeError(
-        f"ENCRYPTION_KEY must decode to 32, 48, or 64 bytes for AES-SIV, got {len(ENCRYPTION_KEY)}."
+        f"ENCRYPTION_KEY must decode to exactly 64 bytes for AES-256-SIV, got {len(ENCRYPTION_KEY)}."
     )
 
 # Static shared secret for the kiosk/tablet app (Kalpataru-Extracto-tab),

@@ -28,3 +28,15 @@ def test_placeholder_jwt_secret_rejected(monkeypatch):
 
 def test_strong_jwt_secret_accepted(monkeypatch):
     assert _reload(monkeypatch, JWT_SECRET="x" * 40).JWT_SECRET == "x" * 40
+
+
+@pytest.mark.parametrize("size", [32, 48, 63, 65])
+def test_encryption_key_must_be_exactly_64_bytes(monkeypatch, size):
+    key = base64.b64encode(b"\x02" * size).decode()
+    with pytest.raises(RuntimeError, match="exactly 64 bytes"):
+        _reload(monkeypatch, ENCRYPTION_KEY=key)
+
+
+def test_64_byte_encryption_key_accepted(monkeypatch):
+    key = base64.b64encode(b"\x02" * 64).decode()
+    assert len(_reload(monkeypatch, ENCRYPTION_KEY=key).ENCRYPTION_KEY) == 64
