@@ -64,6 +64,11 @@ const Login = () => {
         if (response.data?.employee) {
           setUser(response.data.employee);
         }
+        if (response.data?.employee?.must_change_password) {
+          showNotification("You must set a new password before continuing.", "info");
+          setTimeout(() => navigate("/change-password"), 800);
+          return;
+        }
         showNotification(response.message || "Login successful!", "success");
         setTimeout(() => navigate("/dashboard"), 800);
       }
