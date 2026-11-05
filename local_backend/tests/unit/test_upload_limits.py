@@ -38,3 +38,30 @@ def test_oversized_upload_aborts_early():
 
 def test_exact_limit_is_allowed():
     assert len(asyncio.run(read_limited_upload(_upload(b"x" * 1000), 1000))) == 1000
+
+
+# ── SCR-11 ───────────────────────────────────────────────────────────────────
+def _png(w, h):
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("1", (w, h)).save(buf, "PNG")  # 1-bit blank image compresses tiny
+    return buf.getvalue()
+
+
+def test_normal_image_accepted():
+    from services.upload_validation import looks_like_real_image
+    assert looks_like_real_image(_png(800, 600))
+
+
+def test_image_over_pixel_ceiling_rejected(monkeypatch):
+    import config
+    from services import upload_validation as uv
+    monkeypatch.setattr(uv.config, "MAX_IMAGE_PIXELS", 1_000_000)
+    small_file_huge_canvas = _png(5000, 5000)  # 25M pixels, only a few KB
+    assert len(small_file_huge_canvas) < 100_000
+    assert not uv.looks_like_real_image(small_file_huge_canvas)
+
+
+def test_non_image_rejected():
+    from services.upload_validation import looks_like_real_image
+    assert not looks_like_real_image(b"not an image")

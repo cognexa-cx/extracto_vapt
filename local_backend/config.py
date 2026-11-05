@@ -70,6 +70,12 @@ IS_PRODUCTION = ENVIRONMENT == "production"
 MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "15"))
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
+# SCR-11: ceiling on decoded image size (width x height). A small compressed
+# file can expand to gigabytes of pixels when decoded by OCR; reject early.
+MAX_IMAGE_PIXELS = int(os.getenv("MAX_IMAGE_PIXELS", "40000000"))
+if MAX_IMAGE_PIXELS < 1_000_000:
+    raise RuntimeError("MAX_IMAGE_PIXELS must be at least 1,000,000.")
+
 # ── Local image storage ──────────────────────────────────────────────────────
 # Approved-record images (invoice pages + vehicle front/back) are written to
 # this directory on disk and served back out via the /images static mount in

@@ -7,6 +7,7 @@ header; a client-side size check alone is trivially bypassed by anyone not
 using the real frontend.
 """
 import io
+import warnings
 
 from fastapi import UploadFile
 from PIL import Image
@@ -45,15 +46,26 @@ async def read_limited_upload(upload: UploadFile, max_bytes: int | None = None) 
     return b"".join(chunks)
 
 
+# SCR-11: make Pillow's own decompression-bomb guard use the configured
+# ceiling process-wide, so the OCR/decoder path is protected too.
+Image.MAX_IMAGE_PIXELS = config.MAX_IMAGE_PIXELS
+
+
 def looks_like_real_image(file_bytes: bytes) -> bool:
     """Actually decodes the bytes as an image rather than trusting the
     client-supplied Content-Type header, which is just a string the caller
-    can set to anything. Catches broad Exception (not just
-    UnidentifiedImageError) because a truncated/corrupt/decompression-bomb
-    file can raise other Pillow errors during verify() — any of those means
-    "don't trust this as an image", not "crash the request"."""
+    can set to anything. Also rejects images whose dimensions exceed
+    MAX_IMAGE_PIXELS and treats Pillow decompression-bomb warnings as
+    errors. Catches broad Exception because a truncated/corrupt file can
+    raise many Pillow errors during verify() — any of those means "don't
+    trust this as an image", not "crash the request"."""
     try:
-        Image.open(io.BytesIO(file_bytes)).verify()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(file_bytes)) as img:
+                if img.width * img.height > config.MAX_IMAGE_PIXELS:
+                    return False
+                img.verify()
         return True
     except Exception:
         return False
