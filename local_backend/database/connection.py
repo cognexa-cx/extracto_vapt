@@ -82,6 +82,14 @@ async def _migrate_encrypt_extraction_record_pages_pii() -> None:
         )
 
 
+async def run_pii_migrations() -> None:
+    """Encrypt any legacy plaintext in every registered PII column. Raises on
+    the first failure so the caller can abort startup (SCR-09)."""
+    for table, pk in (("users", "id"), ("extraction_records", "id"), ("manual_entry_records", "id")):
+        await _migrate_encrypt_table_pii(table, pk)
+    await _migrate_encrypt_extraction_record_pages_pii()
+
+
 async def init_pool() -> aioodbc.Pool:
     """Create the aioodbc connection pool and ensure the schema exists."""
     global _pool
@@ -141,16 +149,20 @@ async def init_pool() -> aioodbc.Pool:
             "Assuming tables already exist or database user lacks DDL permissions."
         )
 
-    for table, pk in (("users", "id"), ("extraction_records", "id"), ("manual_entry_records", "id")):
-        try:
-            await _migrate_encrypt_table_pii(table, pk)
-        except Exception as e:
-            logger.warning(f"⚠️ {table} PII encryption migration skipped: {e}")
-
+    # SCR-09: a failed PII encryption migration must NOT let the app come up
+    # serving legacy plaintext as if it were protected. Any failure aborts
+    # startup (after releasing the pool); fix the cause and restart.
     try:
-        await _migrate_encrypt_extraction_record_pages_pii()
+        await run_pii_migrations()
     except Exception as e:
-        logger.warning(f"⚠️ extraction_record_pages PII encryption migration skipped: {e}")
+        logger.critical(
+            f"PII encryption migration failed -- refusing to start: {e}",
+            extra={"event": "pii_migration_failed"},
+        )
+        _pool.close()
+        await _pool.wait_closed()
+        _pool = None
+        raise RuntimeError(f"PII encryption migration incomplete; refusing startup: {e}") from e
 
     # Opportunistic cleanup of abandoned pending sessions (extract() called but
     # never approved/rejected) so they don't accumulate indefinitely.
