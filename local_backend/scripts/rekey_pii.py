@@ -93,6 +93,9 @@ def main() -> int:
     # config validates the whole environment; give it the NEW key so a .env that
     # still holds the old (now invalid-sized) key doesn't stop this script.
     os.environ["ENCRYPTION_KEY"] = base64.b64encode(new_key).decode()
+    # Running "python scripts/rekey_pii.py" puts scripts/ on sys.path, not the
+    # backend root that holds config.py and services/.
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import pyodbc  # noqa: E402  (imported late so unit tests don't need ODBC)
     import config  # noqa: E402
     from services.pii import TABLE_PII_COLUMNS  # noqa: E402
