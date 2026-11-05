@@ -67,6 +67,7 @@ from routes import (
     reject_router,
     manual_entry_router,
     auth_router,
+    devices_router,
 )
 
 
@@ -130,7 +131,7 @@ app.add_middleware(
     allow_origins=config.CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Device-Key", "X-User-Name", "X-User-Id"],
+    allow_headers=["Authorization", "Content-Type", "X-Device-Key", "X-Device-Id", "X-User-Name", "X-User-Id"],
 )
 
 # Gzip JSON responses — /history list payloads are hundreds of KB of highly
@@ -168,12 +169,13 @@ async def serve_image(
     sig: str | None = None,
     authorization: str | None = Header(default=None),
     x_device_key: str | None = Header(default=None),
+    x_device_id: str | None = Header(default=None),
 ):
     from services.storage import STORAGE_ROOT, verify_signature
 
     authorized = verify_signature(file_path, exp, sig)
     if not authorized:
-        actor = await _user_or_device_from_headers(authorization, x_device_key)
+        actor = await _user_or_device_from_headers(authorization, x_device_key, x_device_id)
         authorized = actor is not None
 
     if not authorized:
@@ -225,6 +227,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(auth_router)
+app.include_router(devices_router)
 app.include_router(local_extract_router)
 app.include_router(upload_router)
 app.include_router(history_router)

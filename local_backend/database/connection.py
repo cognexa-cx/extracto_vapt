@@ -138,6 +138,7 @@ async def init_pool() -> aioodbc.Pool:
         await execute_query(_ADD_TOKEN_VERSION_COLUMN_SQL)
         await execute_query(_ADD_MUST_CHANGE_PASSWORD_COLUMN_SQL)
         await execute_query(_CREATE_REFRESH_TOKENS_TABLE_SQL)
+        await execute_query(_CREATE_DEVICES_TABLE_SQL)
         await execute_query(_WIDEN_PII_COLUMNS_SQL)
         logger.info(
             "✅ Schema verified / created (extraction_records + manual_entry_records + "
@@ -412,6 +413,24 @@ IF NOT EXISTS (
 )
 BEGIN
     ALTER TABLE users ADD must_change_password BIT NOT NULL DEFAULT 0;
+END
+"""
+
+# SCR-04: one row per physical kiosk/tablet, each with its own credential.
+# Only a SHA-256 hash of the (256-bit random) key is stored, never the key.
+# Devices can be revoked individually and expire automatically.
+_CREATE_DEVICES_TABLE_SQL = """
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='devices' and xtype='U')
+BEGIN
+    CREATE TABLE devices (
+        id            VARCHAR(100) PRIMARY KEY,
+        name          VARCHAR(200) NOT NULL,
+        key_hash      VARCHAR(64) NOT NULL,
+        created_at    DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+        expires_at    DATETIME2 NOT NULL,
+        revoked_at    DATETIME2 NULL,
+        last_used_at  DATETIME2 NULL
+    )
 END
 """
 

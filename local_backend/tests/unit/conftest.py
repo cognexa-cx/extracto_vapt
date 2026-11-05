@@ -9,7 +9,7 @@ os.environ.setdefault("SQL_SERVER_HOST", "localhost")
 os.environ.setdefault("SQL_SERVER_DB", "test")
 os.environ.setdefault("JWT_SECRET", "j" * 48)
 os.environ.setdefault("IMAGE_SIGNING_SECRET", "i" * 48)
-os.environ.setdefault("DEVICE_API_KEY", "d" * 40)
+os.environ.pop("DEVICE_API_KEY", None)
 os.environ.setdefault("ENCRYPTION_KEY", base64.b64encode(b"\x01" * 64).decode())
 os.environ.setdefault("ENVIRONMENT", "test")
 

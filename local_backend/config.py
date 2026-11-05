@@ -10,7 +10,6 @@ BASE_REQUIRED_VARS = [
     "SQL_SERVER_DB",
     # Auth
     "JWT_SECRET",
-    "DEVICE_API_KEY",
     # Dedicated HMAC key for signed image URLs (SCR-13) -- never JWT_SECRET.
     "IMAGE_SIGNING_SECRET",
     # PII field-level encryption (users/extraction_records/manual_entry_records
@@ -196,6 +195,18 @@ PII_ALLOW_LEGACY_PLAINTEXT = os.getenv("PII_ALLOW_LEGACY_PLAINTEXT", "no").strip
 # which has no per-user login — it authenticates as a device via the
 # X-Device-Key header instead of a JWT. See auth/dependencies.py.
 DEVICE_API_KEY = os.getenv("DEVICE_API_KEY")
+
+# SCR-04: devices authenticate with their own credential (X-Device-Id +
+# X-Device-Key, see auth/devices.py). The old single shared DEVICE_API_KEY is
+# DEPRECATED and ignored unless this is explicitly set to "yes" (migration
+# aid only -- it gives no per-device identity or revocation).
+ALLOW_LEGACY_SHARED_DEVICE_KEY = (
+    os.getenv("ALLOW_LEGACY_SHARED_DEVICE_KEY", "no").strip().lower() == "yes"
+)
+if ALLOW_LEGACY_SHARED_DEVICE_KEY:
+    if not DEVICE_API_KEY:
+        raise RuntimeError("ALLOW_LEGACY_SHARED_DEVICE_KEY=yes requires DEVICE_API_KEY to be set.")
+    _require_strong_secret("DEVICE_API_KEY", DEVICE_API_KEY)
 
 # Seed account created on first run if the users table is empty, so there's
 # a real (bcrypt-hashed) account to log in with instead of a hardcoded
