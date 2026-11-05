@@ -1,10 +1,9 @@
-import io
 import logging
 from fastapi import APIRouter, File, Request, UploadFile, Form, Depends
 from typing import Optional
 import aioodbc
-from PIL import Image, UnidentifiedImageError
 
+import config
 from auth.dependencies import require_user_or_device
 from auth.rate_limit import limiter
 from models import UploadResponse
@@ -12,22 +11,14 @@ from services.storage import StorageService, safe_filename
 from database.connection import get_db, execute_query, fetchrow_query
 from db_models.extraction import new_extraction_record, insert_record
 from services.pii import encrypt_row_fields
+from services.upload_validation import (
+    UploadTooLargeError,
+    looks_like_real_image,
+    read_limited_upload,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15MB
-
-
-def _looks_like_real_image(file_bytes: bytes) -> bool:
-    """Verify the bytes actually decode as an image — content_type is
-    client-supplied and trivially spoofable on its own."""
-    try:
-        Image.open(io.BytesIO(file_bytes)).verify()
-        return True
-    except (UnidentifiedImageError, OSError, ValueError):
-        return False
-
 
 @router.post(
     "/upload",
@@ -71,16 +62,17 @@ async def upload_photos(
             )
             continue
 
-        file_bytes = await photo.read()
+        try:
+            file_bytes = await read_limited_upload(photo)
+        except UploadTooLargeError:
+            validation_messages.append(
+                f"'{label}' exceeds the {config.MAX_UPLOAD_SIZE_MB}MB upload limit and was skipped."
+            )
+            continue
         if not file_bytes:
             validation_messages.append(f"'{label}' is empty and was skipped.")
             continue
-        if len(file_bytes) > MAX_UPLOAD_BYTES:
-            validation_messages.append(
-                f"'{label}' exceeds the {MAX_UPLOAD_BYTES // (1024*1024)}MB upload limit and was skipped."
-            )
-            continue
-        if not _looks_like_real_image(file_bytes):
+        if not looks_like_real_image(file_bytes):
             validation_messages.append(
                 f"'{label}' is not a valid image file (failed image decode) and was skipped."
             )

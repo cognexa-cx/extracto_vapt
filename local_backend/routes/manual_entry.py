@@ -15,7 +15,11 @@ from models import (
 )
 from database.connection import get_db, execute_query, fetch_query, fetchrow_query
 from services.storage import StorageService, safe_filename
-from services.upload_validation import validate_image_bytes
+from services.upload_validation import (
+    UploadTooLargeError,
+    read_limited_upload,
+    validate_image_bytes,
+)
 from services.pii import decrypt_row, encrypt_row_fields
 
 logger = logging.getLogger(__name__)
@@ -118,7 +122,7 @@ async def manual_approve(
             )
         else:
             try:
-                image_bytes = await image.read()
+                image_bytes = await read_limited_upload(image)
                 img_err = validate_image_bytes(image, image_bytes) if image_bytes else None
                 if img_err:
                     validation_messages.append(f"Warning: {img_err} Skipping upload.")
@@ -131,6 +135,8 @@ async def manual_approve(
                     logger.info(f"✅ Manual image uploaded: {image_url}")
                 else:
                     validation_messages.append("Warning: uploaded image was empty, skipped.")
+            except UploadTooLargeError as e:
+                validation_messages.append(f"Warning: {e} Skipping upload.")
             except Exception as e:
                 logger.exception("Image upload failed in /manual/approve")
                 validation_messages.append(f"Warning: image upload failed: {str(e)}")

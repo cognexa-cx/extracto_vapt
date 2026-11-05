@@ -14,6 +14,37 @@ from PIL import Image
 import config
 
 
+class UploadTooLargeError(ValueError):
+    """Raised by read_limited_upload as soon as the body exceeds the limit."""
+
+
+_READ_CHUNK_BYTES = 64 * 1024
+
+
+async def read_limited_upload(upload: UploadFile, max_bytes: int | None = None) -> bytes:
+    """Read an upload in bounded chunks, aborting as soon as `max_bytes` is
+    exceeded (SCR-10). Unlike `await upload.read()`, an oversized body is
+    never fully buffered by this application, and the limit is applied to
+    the bytes actually received, not the client-controlled Content-Length.
+    Also enforce a request-body limit at the reverse proxy/gateway (e.g.
+    nginx client_max_body_size) so the framework does not spool huge
+    bodies to disk before this code runs."""
+    limit = config.MAX_UPLOAD_SIZE_BYTES if max_bytes is None else max_bytes
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise UploadTooLargeError(
+                f"File '{upload.filename}' exceeds the {limit // (1024 * 1024)}MB limit."
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def looks_like_real_image(file_bytes: bytes) -> bool:
     """Actually decodes the bytes as an image rather than trusting the
     client-supplied Content-Type header, which is just a string the caller
