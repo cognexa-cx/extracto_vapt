@@ -115,6 +115,12 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 # see auth/refresh_tokens.py.
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "30"))
 
+# SCR-16: enforce documented operating limits on token lifetimes.
+if not 5 <= ACCESS_TOKEN_EXPIRE_MINUTES <= 60:
+    raise RuntimeError("ACCESS_TOKEN_EXPIRE_MINUTES must be between 5 and 60")
+if not 1 <= REFRESH_TOKEN_EXPIRE_DAYS <= 30:
+    raise RuntimeError("REFRESH_TOKEN_EXPIRE_DAYS must be between 1 and 30")
+
 # How long a REVOKED (not just expired) refresh_tokens row is kept before
 # the periodic cleanup deletes it — see auth/refresh_tokens.cleanup_expired_tokens.
 REFRESH_TOKEN_REVOKED_RETENTION_DAYS = int(os.getenv("REFRESH_TOKEN_REVOKED_RETENTION_DAYS", "7"))

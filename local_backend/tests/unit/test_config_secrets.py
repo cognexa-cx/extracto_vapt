@@ -40,3 +40,19 @@ def test_encryption_key_must_be_exactly_64_bytes(monkeypatch, size):
 def test_64_byte_encryption_key_accepted(monkeypatch):
     key = base64.b64encode(b"\x02" * 64).decode()
     assert len(_reload(monkeypatch, ENCRYPTION_KEY=key).ENCRYPTION_KEY) == 64
+
+
+@pytest.mark.parametrize("var,value", [
+    ("ACCESS_TOKEN_EXPIRE_MINUTES", "0"),
+    ("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"),
+    ("REFRESH_TOKEN_EXPIRE_DAYS", "-1"),
+    ("REFRESH_TOKEN_EXPIRE_DAYS", "365"),
+])
+def test_token_lifetimes_out_of_range_rejected(monkeypatch, var, value):
+    with pytest.raises(RuntimeError, match=var):
+        _reload(monkeypatch, **{var: value})
+
+
+def test_default_token_lifetimes_valid(monkeypatch):
+    cfg = _reload(monkeypatch, ACCESS_TOKEN_EXPIRE_MINUTES=None, REFRESH_TOKEN_EXPIRE_DAYS=None)
+    assert cfg.ACCESS_TOKEN_EXPIRE_MINUTES == 30 and cfg.REFRESH_TOKEN_EXPIRE_DAYS == 30
