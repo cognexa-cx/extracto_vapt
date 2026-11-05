@@ -23,7 +23,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import config
 
@@ -62,6 +62,14 @@ def verify_signature(relative_path: str, expires_at: str | None, signature: str 
         return False
     expected = _signature_for(relative_path, expires_at_int)
     return hmac.compare_digest(expected, signature)
+
+
+def _redacted_path(url: str) -> str:
+    """Path portion of a URL with the query string (exp/sig) removed."""
+    try:
+        return urlsplit(url).path
+    except Exception:
+        return "[unparseable]"
 
 
 def safe_filename(filename: str) -> str:
@@ -251,7 +259,9 @@ class StorageService:
             idx = url.find(marker)
             if idx == -1:
                 return False
-            relative_path = url[idx + len(marker):]
+            # SCR-17: drop any query string (exp/sig of a signed URL) so the
+            # signature is never used as part of the path or written to logs.
+            relative_path = urlsplit(url[idx + len(marker):]).path
             file_path = (STORAGE_ROOT / relative_path).resolve()
             if STORAGE_ROOT not in file_path.parents and file_path != STORAGE_ROOT:
                 logger.warning(f"Refusing to delete outside storage root: {relative_path}")
@@ -262,7 +272,16 @@ class StorageService:
                 return True
             return False
         except Exception as e:
-            logger.warning(f"Could not delete file from URL {url}: {e}")
+            # SCR-17: never log the URL itself (it may carry a bearer-style
+            # signature); log only the redacted path and the error type.
+            logger.warning(
+                "Could not delete stored image",
+                extra={
+                    "event": "storage_delete_failed",
+                    "path": _redacted_path(url),
+                    "error_type": type(e).__name__,
+                },
+            )
             return False
 
     @staticmethod
